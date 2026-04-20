@@ -661,8 +661,39 @@ def cmd_show(sessions, session_id) -> None:
     print(json.dumps(out, indent=2))
 
 
+FIRST_RUN_FLAG = Path.home() / ".claude" / ".claude-sessions-installed"
+
+WELCOME = """
+╔══════════════════════════════════════════════════════╗
+║           claude-sessions — first run                ║
+╠══════════════════════════════════════════════════════╣
+║                                                      ║
+║  TUI (interactive browser):                          ║
+║    claude-sessions                                   ║
+║                                                      ║
+║  CLI (JSON output for scripting):                    ║
+║    claude-sessions list                              ║
+║    claude-sessions show <session-id>                 ║
+║                                                      ║
+║  Uninstall:                                          ║
+║    pip uninstall claude-code-sessions                ║
+║                                                      ║
+╚══════════════════════════════════════════════════════╝
+"""
+
+
+def maybe_show_welcome() -> None:
+    if not FIRST_RUN_FLAG.exists():
+        print(WELCOME)
+        try:
+            FIRST_RUN_FLAG.touch()
+        except OSError:
+            pass
+
+
 def main() -> None:
     import argparse
+    maybe_show_welcome()
 
     parser = argparse.ArgumentParser(
         prog="claude-sessions",

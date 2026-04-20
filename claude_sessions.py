@@ -604,18 +604,82 @@ def tui(stdscr, all_sessions):
             cursor = scroll = 0
 
 
-def main() -> None:
-    sys.stdout.write("Scanning sessions...")
-    sys.stdout.flush()
-    sessions = collect_sessions(limit=50)
-    sys.stdout.write(f" found {len(sessions)} sessions.\n")
-    sys.stdout.flush()
+def cmd_list(sessions) -> None:
+    out = [
+        {
+            "session_id": s["session_id"],
+            "project": s["project"],
+            "model": s["model"],
+            "last_ts": fmt_ts(s["last_ts"]),
+            "input_tokens": s["input_tokens"],
+            "output_tokens": s["output_tokens"],
+            "total_tokens": s["total_tokens"],
+        }
+        for s in sessions
+    ]
+    print(json.dumps(out, indent=2))
 
-    if not sessions:
-        print("No sessions found.")
+
+def cmd_show(sessions, session_id) -> None:
+    match = next((s for s in sessions if s["session_id"] == session_id), None)
+    if match is None:
+        print(json.dumps({"error": f"session not found: {session_id}"}), file=sys.stderr)
+        sys.exit(1)
+    out = {
+        "session_id": match["session_id"],
+        "project": match["project"],
+        "model": match["model"],
+        "last_ts": fmt_ts(match["last_ts"]),
+        "first_ts": fmt_ts(match["first_ts"]),
+        "input_tokens": match["input_tokens"],
+        "output_tokens": match["output_tokens"],
+        "cache_creation_tokens": match["cache_creation_tokens"],
+        "cache_read_tokens": match["cache_read_tokens"],
+        "total_tokens": match["total_tokens"],
+        "message_count": match["message_count"],
+        "git_branch": match["git_branch"],
+        "cwd": match["cwd"],
+        "tools_used": match["tools_used"],
+        "modified_files": match["modified_files"],
+    }
+    print(json.dumps(out, indent=2))
+
+
+def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="claude-sessions",
+        description="Browse Claude Code sessions (TUI) or query them (CLI).",
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    sub.add_parser("list", help="List sessions as JSON")
+
+    p_show = sub.add_parser("show", help="Show token details for a session")
+    p_show.add_argument("session_id", help="Session ID (from 'list')")
+
+    args = parser.parse_args()
+
+    if args.command is None:
+        # TUI mode
+        sys.stdout.write("Scanning sessions...")
+        sys.stdout.flush()
+        sessions = collect_sessions(limit=50)
+        sys.stdout.write(f" found {len(sessions)} sessions.\n")
+        sys.stdout.flush()
+        if not sessions:
+            print("No sessions found.")
+            return
+        curses.wrapper(tui, sessions)
         return
 
-    curses.wrapper(tui, sessions)
+    sessions = collect_sessions(limit=500)
+
+    if args.command == "list":
+        cmd_list(sessions)
+    elif args.command == "show":
+        cmd_show(sessions, args.session_id)
 
 
 if __name__ == "__main__":

@@ -548,10 +548,15 @@ def tui(stdscr, all_sessions):
         if key in (ord("q"), ord("Q")):
             break
         elif key == 27:
-            if esc_pending:
+            if filter_text:
+                filter_text = ""
+                sessions    = rebuild()
+                cursor = scroll = 0
+            elif esc_pending:
                 break
-            esc_pending = True
-            continue
+            else:
+                esc_pending = True
+                continue
         elif key == ord("/"):
             filtering = True
         elif key in (curses.KEY_UP, ord("k"), ord("K")):

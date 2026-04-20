@@ -34,22 +34,22 @@ pip install git+https://github.com/ssoto/claude-code-sessions.git
 ### TUI (interactive)
 
 ```bash
-claude-sessions
+claude-code-sessions
 ```
 
 ### CLI (JSON output)
 
 ```bash
 # List all sessions
-claude-sessions list
+claude-code-sessions list
 
 # Show token details for a specific session
-claude-sessions show <session-id>
+claude-code-sessions show <session-id>
 
 # Pipe-friendly examples
-claude-sessions list | jq '.[].session_id'
-claude-sessions list | jq 'sort_by(.total_tokens) | reverse | .[0]'
-claude-sessions show <session-id> | jq '{model, input_tokens, output_tokens}'
+claude-code-sessions list | jq '.[].session_id'
+claude-code-sessions list | jq 'sort_by(.total_tokens) | reverse | .[0]'
+claude-code-sessions show <session-id> | jq '{model, input_tokens, output_tokens}'
 ```
 
 ## Uninstall

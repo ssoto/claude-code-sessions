@@ -662,6 +662,7 @@ def cmd_show(sessions, session_id) -> None:
 
 
 FIRST_RUN_FLAG = Path.home() / ".claude" / ".claude-sessions-installed"
+VERSION = "0.1.0"
 
 WELCOME = """
 ╔══════════════════════════════════════════════════════╗
@@ -683,10 +684,14 @@ WELCOME = """
 
 
 def maybe_show_welcome() -> None:
-    if not FIRST_RUN_FLAG.exists():
+    try:
+        installed = FIRST_RUN_FLAG.read_text().strip() if FIRST_RUN_FLAG.exists() else ""
+    except OSError:
+        installed = ""
+    if installed != VERSION:
         print(WELCOME)
         try:
-            FIRST_RUN_FLAG.touch()
+            FIRST_RUN_FLAG.write_text(VERSION)
         except OSError:
             pass
 

@@ -2,7 +2,7 @@
 
 A terminal UI (TUI) tool to browse, inspect, and resume [Claude Code](https://claude.ai/code) sessions stored in `~/.claude/projects/`.
 
-![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
+![Python](https://img.shields.io/badge/python-3.9%2B-blue) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
 
 ## Features
 
@@ -17,7 +17,7 @@ A terminal UI (TUI) tool to browse, inspect, and resume [Claude Code](https://cl
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.9+
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and accessible as `claude` in your `$PATH`
 
 No external Python dependencies — uses only the standard library (`curses`, `json`, `pathlib`, …).
@@ -25,18 +25,12 @@ No external Python dependencies — uses only the standard library (`curses`, `j
 ## Installation
 
 ```bash
-git clone git@github.com:ssoto/claude-code-sessions.git
-cd claude-code-sessions
-# Optional: make it executable and add to PATH
-chmod +x claude_sessions.py
-ln -s "$(pwd)/claude_sessions.py" /usr/local/bin/claude-sessions
+pip install git+ssh://git@github.com/ssoto/claude-code-sessions.git
 ```
 
 ## Usage
 
 ```bash
-python3 claude_sessions.py
-# or, if linked:
 claude-sessions
 ```
 

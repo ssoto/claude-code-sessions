@@ -52,6 +52,12 @@ claude-sessions list | jq 'sort_by(.total_tokens) | reverse | .[0]'
 claude-sessions show <session-id> | jq '{model, input_tokens, output_tokens}'
 ```
 
+## Uninstall
+
+```bash
+pip uninstall claude-code-sessions
+```
+
 ## Keybindings
 
 ### Table view

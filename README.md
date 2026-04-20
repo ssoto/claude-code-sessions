@@ -62,4 +62,4 @@ Sessions are read from `~/.claude/projects/`. This directory is created and mana
 
 ## License
 
-MIT
+[PolyForm Noncommercial 1.0.0](LICENSE) — free for personal and noncommercial use; commercial use prohibited.

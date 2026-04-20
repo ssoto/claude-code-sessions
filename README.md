@@ -1,6 +1,6 @@
 # claude-code-sessions
 
-A terminal UI (TUI) tool to browse, inspect, and resume [Claude Code](https://claude.ai/code) sessions stored in `~/.claude/projects/`.
+A terminal UI (TUI) tool to browse, inspect, and resume [Claude Code](https://claude.ai/code) sessions stored in `~/.claude/projects/`. Also exposes a CLI mode with JSON output for scripting and piping.
 
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
 
@@ -14,6 +14,7 @@ A terminal UI (TUI) tool to browse, inspect, and resume [Claude Code](https://cl
 - Delete sessions (`d` key) with confirmation
 - Vim-style navigation (`j`/`k`)
 - Color-coded output, recent sessions highlighted
+- CLI mode with JSON output for scripting (`list`, `show`)
 
 ## Requirements
 
@@ -30,8 +31,25 @@ pip install git+https://github.com/ssoto/claude-code-sessions.git
 
 ## Usage
 
+### TUI (interactive)
+
 ```bash
 claude-sessions
+```
+
+### CLI (JSON output)
+
+```bash
+# List all sessions
+claude-sessions list
+
+# Show token details for a specific session
+claude-sessions show <session-id>
+
+# Pipe-friendly examples
+claude-sessions list | jq '.[].session_id'
+claude-sessions list | jq 'sort_by(.total_tokens) | reverse | .[0]'
+claude-sessions show <session-id> | jq '{model, input_tokens, output_tokens}'
 ```
 
 ## Keybindings

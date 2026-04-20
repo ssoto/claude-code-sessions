@@ -427,18 +427,61 @@ def build_detail_lines(s, w):
     return lines
 
 
+def copy_to_clipboard(text: str) -> bool:
+    import subprocess
+    for cmd in (["pbcopy"], ["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]):
+        try:
+            proc = subprocess.run(cmd, input=text.encode(), capture_output=True)
+            if proc.returncode == 0:
+                return True
+        except FileNotFoundError:
+            continue
+    return False
+
+
+def session_to_text(s) -> str:
+    lines = [
+        f"Session ID:   {s['session_id']}",
+        f"Project:      {s['project']}",
+        f"Model:        {s['model']}",
+        f"Git branch:   {s['git_branch'] or '—'}",
+        f"Directory:    {s['cwd'] or '—'}",
+        f"Start:        {fmt_ts(s['first_ts'])}",
+        f"End:          {fmt_ts(s['last_ts'])}",
+        f"Messages:     {s['message_count']}",
+        "",
+        "Token breakdown:",
+        f"  Input:          {fmt_num(s['input_tokens'])}",
+        f"  Output:         {fmt_num(s['output_tokens'])}",
+        f"  Cache creation: {fmt_num(s['cache_creation_tokens'])}",
+        f"  Cache read:     {fmt_num(s['cache_read_tokens'])}",
+        f"  TOTAL:          {fmt_num(s['total_tokens'])}",
+        "",
+        "Tools used:",
+    ]
+    for tool, count in sorted((s.get("tools_used") or {}).items(), key=lambda x: -x[1]):
+        lines.append(f"  {tool}: {count}")
+    lines += ["", "Modified files:"]
+    for f in (s.get("modified_files") or []):
+        lines.append(f"  {f}")
+    if s.get("last_prompt"):
+        lines += ["", "Last prompt:", s["last_prompt"]]
+    return "\n".join(lines)
+
+
 def draw_detail(stdscr, s):
     """Returns True if user chose to open session in Claude."""
     resumable, reason = session_resumable(s)
     lines = build_detail_lines(s, 80)  # built once, rebuilt on resize
     scroll = 0
+    copy_feedback = ""
 
     while True:
         stdscr.erase()
         h, w = stdscr.getmaxyx()
         lines = build_detail_lines(s, w)
 
-        title = " Session detail — ↑↓/jk scroll  o open  Esc/q back "
+        title = " Session detail — ↑↓/jk scroll  o open  c copy  Esc/q back "
         stdscr.addstr(0, 0, title[:w].ljust(w - 1), curses.color_pair(C_TITLE) | curses.A_BOLD)
 
         visible = h - 3  # title + footer + btn
@@ -451,7 +494,9 @@ def draw_detail(stdscr, s):
             addstr_clipped(stdscr, 1 + i, 0, text, attr, w)
 
         # Button / error row
-        if resumable:
+        if copy_feedback:
+            stdscr.addstr(h - 1, 0, copy_feedback[:w - 1].ljust(w - 1), curses.color_pair(C_BTN) | curses.A_BOLD)
+        elif resumable:
             btn = "  [ o ]  Open in Claude  "
             stdscr.addstr(h - 1, 0, btn[:w - 1].ljust(w - 1), curses.color_pair(C_BTN) | curses.A_BOLD)
         else:
@@ -460,12 +505,16 @@ def draw_detail(stdscr, s):
 
         stdscr.refresh()
         key = stdscr.getch()
+        copy_feedback = ""
 
         max_scroll = max(0, len(lines) - visible)
         if key in (ord("q"), ord("Q"), 27, curses.KEY_LEFT):
             return False
         elif key in (ord("o"), ord("O")) and resumable:
             return True
+        elif key in (ord("c"), ord("C")):
+            ok = copy_to_clipboard(session_to_text(s))
+            copy_feedback = "  ✓ Copied to clipboard  " if ok else "  ✗ Clipboard not available  "
         elif key in (curses.KEY_UP, ord("k"), ord("K")):
             scroll = max(0, scroll - 1)
         elif key in (curses.KEY_DOWN, ord("j"), ord("J")):

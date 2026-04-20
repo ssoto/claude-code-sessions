@@ -272,7 +272,7 @@ def draw_header(stdscr, sort_col, sort_asc, pw, w):
     addstr_clipped(stdscr, 1, col, " Model", curses.color_pair(C_HEADER) | curses.A_BOLD, w)
 
 
-def draw_table(stdscr, sessions, cursor, scroll, sort_col, sort_asc, filter_text=""):
+def draw_table(stdscr, sessions, cursor, scroll, sort_col, sort_asc, filter_text="", esc_pending=False):
     stdscr.erase()
     h, w = stdscr.getmaxyx()
 
@@ -341,8 +341,12 @@ def draw_table(stdscr, sessions, cursor, scroll, sort_col, sort_asc, filter_text
     sort_label = SORT_LABELS[sort_col]
     dir_label  = "asc" if sort_asc else "desc"
     filter_hint = f"  filter: \"{filter_text}\"" if filter_text is not None else ""
-    footer = f" {cursor+1}/{len(sessions)}  sorted by {sort_label} {dir_label}{COL_HINT}{filter_hint} "
-    stdscr.addstr(h - 1, 0, footer[:w - 1].ljust(w - 1), curses.color_pair(C_FOOTER))
+    if esc_pending:
+        footer = " Press Esc again to quit "
+        stdscr.addstr(h - 1, 0, footer[:w - 1].ljust(w - 1), curses.color_pair(C_DANGER) | curses.A_BOLD)
+    else:
+        footer = f" {cursor+1}/{len(sessions)}  sorted by {sort_label} {dir_label}{COL_HINT}{filter_hint} "
+        stdscr.addstr(h - 1, 0, footer[:w - 1].ljust(w - 1), curses.color_pair(C_FOOTER))
     stdscr.refresh()
 
 
@@ -519,7 +523,7 @@ def tui(stdscr, all_sessions):
         h, _ = stdscr.getmaxyx()
         visible = h - 5
         draw_table(stdscr, sessions, cursor, scroll, sort_col, sort_asc,
-                   filter_text if filtering else None)
+                   filter_text if filtering else None, esc_pending)
         key = stdscr.getch()
 
         if filtering:

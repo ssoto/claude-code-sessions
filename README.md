@@ -62,4 +62,4 @@ Sessions are read from `~/.claude/projects/`. This directory is created and mana
 
 ## License
 
-[PolyForm Noncommercial 1.0.0](LICENSE) — free for personal and noncommercial use; commercial use prohibited.
+[GNU AGPL-3.0](LICENSE) — open source; any derivative or hosted version must publish its source code under the same license.

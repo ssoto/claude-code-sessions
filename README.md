@@ -25,7 +25,7 @@ No external Python dependencies — uses only the standard library (`curses`, `j
 ## Installation
 
 ```bash
-pip install git+ssh://git@github.com/ssoto/claude-code-sessions.git
+pip install git+https://github.com/ssoto/claude-code-sessions.git
 ```
 
 ## Usage

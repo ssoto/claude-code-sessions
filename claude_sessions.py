@@ -614,7 +614,7 @@ def tui(stdscr, all_sessions):
                 sort_asc = not sort_asc
             else:
                 sort_col = col
-                sort_asc = col != 0
+                sort_asc = col == 1  # ascending only for Project (alphabetical)
             sessions = rebuild()
             cursor = scroll = 0
         esc_pending = False

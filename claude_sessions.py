@@ -511,8 +511,9 @@ def tui(stdscr, all_sessions):
         return apply_filter(base, filter_text)
 
     sessions = rebuild()
-    cursor   = 0
-    scroll   = 0
+    cursor    = 0
+    scroll    = 0
+    esc_pending = False
 
     while True:
         h, _ = stdscr.getmaxyx()
@@ -540,8 +541,13 @@ def tui(stdscr, all_sessions):
             continue
 
         # Normal navigation mode
-        if key in (ord("q"), ord("Q"), 27):
+        if key in (ord("q"), ord("Q")):
             break
+        elif key == 27:
+            if esc_pending:
+                break
+            esc_pending = True
+            continue
         elif key == ord("/"):
             filtering = True
         elif key in (curses.KEY_UP, ord("k"), ord("K")):
@@ -602,6 +608,7 @@ def tui(stdscr, all_sessions):
                 sort_asc = col != 0
             sessions = rebuild()
             cursor = scroll = 0
+        esc_pending = False
 
 
 def cmd_list(sessions) -> None:

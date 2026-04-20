@@ -714,15 +714,15 @@ FIRST_RUN_FLAG = Path.home() / ".claude" / ".claude-sessions-installed"
 
 WELCOME = """
 ╔══════════════════════════════════════════════════════╗
-║         claude-sessions installed!                   ║
+║      claude-code-sessions installed!                 ║
 ╠══════════════════════════════════════════════════════╣
 ║                                                      ║
 ║  TUI (interactive browser):                          ║
-║    claude-sessions                                   ║
+║    claude-code-sessions                              ║
 ║                                                      ║
 ║  CLI (JSON output for scripting):                    ║
-║    claude-sessions list                              ║
-║    claude-sessions show <session-id>                 ║
+║    claude-code-sessions list                         ║
+║    claude-code-sessions show <session-id>            ║
 ║                                                      ║
 ║  Uninstall:                                          ║
 ║    pip uninstall claude-code-sessions                ║
@@ -745,7 +745,7 @@ def main() -> None:
     maybe_show_welcome()
 
     parser = argparse.ArgumentParser(
-        prog="claude-sessions",
+        prog="claude-code-sessions",
         description="Browse Claude Code sessions (TUI) or query them (CLI).",
     )
     sub = parser.add_subparsers(dest="command")

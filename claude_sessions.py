@@ -631,7 +631,7 @@ def apply_filter(sessions, text):
     if not text:
         return sessions
     needle = text.lower()
-    return [s for s in sessions if needle in s["project"].lower() or needle in s["model"].lower()]
+    return [s for s in sessions if any(needle in (s.get(f) or "").lower() for f in ("project", "model", "ai_title", "last_prompt", "cwd"))]
 
 
 def tui(stdscr, all_sessions):

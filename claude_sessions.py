@@ -71,7 +71,13 @@ def parse_session(jsonl_path: Path) -> dict:
     permission_mode = None
     last_prompt = None
     tools_used = Counter()
+    skills_used = Counter()
+    agents_used = Counter()
     modified_files = set()
+    ai_title = None
+    session_type = "new"   # "new" | "resume" | "compact"
+    has_thinking = False
+    used_plan_mode = False
 
     try:
         with open(jsonl_path, encoding="utf-8") as f:
@@ -99,6 +105,19 @@ def parse_session(jsonl_path: Path) -> dict:
                 if t == "last-prompt":
                     last_prompt = obj.get("lastPrompt")
 
+                if t == "ai-title" and ai_title is None:
+                    ai_title = obj.get("aiTitle")
+
+                if t == "attachment":
+                    hook_name = (obj.get("attachment") or {}).get("hookName", "")
+                    if "SessionStart:resume" in hook_name:
+                        session_type = "resume"
+                    elif "SessionStart:compact" in hook_name:
+                        session_type = "compact"
+                    att_type = (obj.get("attachment") or {}).get("type", "")
+                    if att_type in ("plan_mode", "plan_mode_exit"):
+                        used_plan_mode = True
+
                 if t == "file-history-snapshot":
                     snap = obj.get("snapshot", {})
                     for fpath in (snap.get("trackedFileBackups") or {}).keys():
@@ -120,8 +139,22 @@ def parse_session(jsonl_path: Path) -> dict:
                 # Count tool uses from assistant messages
                 if t == "assistant":
                     for block in (msg.get("content") or []):
-                        if isinstance(block, dict) and block.get("type") == "tool_use":
-                            tools_used[block["name"]] += 1
+                        if not isinstance(block, dict):
+                            continue
+                        btype = block.get("type")
+                        if btype == "thinking":
+                            has_thinking = True
+                        elif btype == "tool_use":
+                            name = block["name"]
+                            tools_used[name] += 1
+                            if name == "Skill":
+                                skill = (block.get("input") or {}).get("skill")
+                                if skill:
+                                    skills_used[skill] += 1
+                            elif name == "Agent":
+                                agent = (block.get("input") or {}).get("subagent_type")
+                                if agent:
+                                    agents_used[agent] += 1
 
                 usage = msg.get("usage")
                 if usage:
@@ -156,7 +189,13 @@ def parse_session(jsonl_path: Path) -> dict:
         "entrypoint": entrypoint,
         "permission_mode": permission_mode,
         "last_prompt": last_prompt,
+        "ai_title": ai_title,
+        "session_type": session_type,
+        "has_thinking": has_thinking,
+        "used_plan_mode": used_plan_mode,
         "tools_used": dict(tools_used),
+        "skills_used": dict(skills_used),
+        "agents_used": dict(agents_used),
         "modified_files": sorted(modified_files),
         "path": jsonl_path,
     }
@@ -325,7 +364,7 @@ def draw_table(stdscr, sessions, cursor, scroll, sort_col, sort_asc, filter_text
         addstr_clipped(stdscr, row_y, col, f"{fmt_ts(s['last_ts']):<17} ", cp_date, w)
         col += 18
 
-        proj = s["project"][:pw]
+        proj = (s.get("ai_title") or s["project"])[:pw]
         addstr_clipped(stdscr, row_y, col, f"{proj:<{pw}} ", cp_proj, w)
         col += pw + 1
 
@@ -376,9 +415,19 @@ def build_detail_lines(s, w):
 
     # Session info
     section("Session")
+    if s.get("ai_title"):
+        row("Title",           s["ai_title"],             C_VALUE)
     row("Session ID",      s["session_id"])
     row("Project",         s["project"],              C_PROJECT)
     row("Model",           s["model"],                C_MODEL)
+    row("Session type",    s.get("session_type") or "new")
+    flags = []
+    if s.get("has_thinking"):
+        flags.append("thinking")
+    if s.get("used_plan_mode"):
+        flags.append("plan mode")
+    if flags:
+        row("Features",        ", ".join(flags),          C_NUM)
     row("Git branch",      s["git_branch"] or "—",    C_NUM)
     row("Entrypoint",      s["entrypoint"] or "—")
     row("Permission mode", s["permission_mode"] or "—")
@@ -414,6 +463,20 @@ def build_detail_lines(s, w):
     else:
         lines.append(("  —", C_VALUE, False))
 
+    # Skills used
+    skills = s.get("skills_used") or {}
+    if skills:
+        section("Skills used")
+        for skill, count in sorted(skills.items(), key=lambda x: -x[1]):
+            row(f"  {skill}", count, C_NUM)
+
+    # Agents used
+    agents = s.get("agents_used") or {}
+    if agents:
+        section("Agents used")
+        for agent, count in sorted(agents.items(), key=lambda x: -x[1]):
+            row(f"  {agent}", count, C_NUM)
+
     # Modified files
     section("Modified files")
     files = s.get("modified_files") or []
@@ -440,10 +503,23 @@ def copy_to_clipboard(text: str) -> bool:
 
 
 def session_to_text(s) -> str:
-    lines = [
+    lines = []
+    if s.get("ai_title"):
+        lines.append(f"Title:        {s['ai_title']}")
+    lines += [
         f"Session ID:   {s['session_id']}",
         f"Project:      {s['project']}",
         f"Model:        {s['model']}",
+        f"Session type: {s.get('session_type') or 'new'}",
+    ]
+    flags = []
+    if s.get("has_thinking"):
+        flags.append("thinking")
+    if s.get("used_plan_mode"):
+        flags.append("plan mode")
+    if flags:
+        lines.append(f"Features:     {', '.join(flags)}")
+    lines += [
         f"Git branch:   {s['git_branch'] or '—'}",
         f"Directory:    {s['cwd'] or '—'}",
         f"Start:        {fmt_ts(s['first_ts'])}",
@@ -461,6 +537,14 @@ def session_to_text(s) -> str:
     ]
     for tool, count in sorted((s.get("tools_used") or {}).items(), key=lambda x: -x[1]):
         lines.append(f"  {tool}: {count}")
+    if s.get("skills_used"):
+        lines += ["", "Skills used:"]
+        for skill, count in sorted(s["skills_used"].items(), key=lambda x: -x[1]):
+            lines.append(f"  {skill}: {count}")
+    if s.get("agents_used"):
+        lines += ["", "Agents used:"]
+        for agent, count in sorted(s["agents_used"].items(), key=lambda x: -x[1]):
+            lines.append(f"  {agent}: {count}")
     lines += ["", "Modified files:"]
     for f in (s.get("modified_files") or []):
         lines.append(f"  {f}")
@@ -704,7 +788,13 @@ def cmd_show(sessions, session_id) -> None:
         "message_count": match["message_count"],
         "git_branch": match["git_branch"],
         "cwd": match["cwd"],
+        "ai_title": match.get("ai_title"),
+        "session_type": match.get("session_type"),
+        "has_thinking": match.get("has_thinking"),
+        "used_plan_mode": match.get("used_plan_mode"),
         "tools_used": match["tools_used"],
+        "skills_used": match["skills_used"],
+        "agents_used": match["agents_used"],
         "modified_files": match["modified_files"],
     }
     print(json.dumps(out, indent=2))

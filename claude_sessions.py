@@ -9,12 +9,26 @@ import curses
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from datetime import datetime, timezone
 from collections import defaultdict, Counter
 
 
 CLAUDE_PROJECTS = Path.home() / ".claude" / "projects"
+
+CONTEXT_WINDOWS = {
+    "claude-opus-4-7":   1_000_000,
+    "claude-sonnet-4-6": 1_000_000,
+    "claude-opus-4-6":   1_000_000,
+    "claude-haiku-4-5":  200_000,
+    "claude-sonnet-4-5": 200_000,
+    "claude-opus-4-5":   200_000,
+    "claude-opus-4-1":   200_000,
+    "claude-sonnet-4":   200_000,
+    "claude-opus-4":     200_000,
+}
+DEFAULT_CONTEXT_WINDOW = 200_000
 
 # Color pair IDs
 C_TITLE     = 1   # title bar
@@ -233,6 +247,22 @@ def fmt_num(n: int) -> str:
     return f"{n:,}"
 
 
+def context_window_for(model: str) -> int:
+    for prefix, size in CONTEXT_WINDOWS.items():
+        if (model or "").startswith(prefix):
+            return size
+    return DEFAULT_CONTEXT_WINDOW
+
+
+def fmt_ctx(n: int) -> str:
+    """Format token count as short human-readable string (e.g. 450K, 1M)."""
+    if n >= 1_000_000:
+        return f"{n/1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n//1_000}K"
+    return str(n)
+
+
 def is_recent(ts) -> bool:
     """True if session was active in the last 24 hours."""
     if ts is None:
@@ -243,13 +273,16 @@ def is_recent(ts) -> bool:
     return (now - ts).total_seconds() < 86400
 
 
+REFRESH_INTERVAL = 30  # seconds between auto-refresh
+
 SORT_KEYS   = ["last_ts", "project", "input_tokens", "output_tokens", "total_tokens"]
 SORT_LABELS = ["Date", "Project", "In", "Out", "Total"]
 COL_HINT    = "  1:Date  2:Project  3:In  4:Out  5:Total"
 
-MODEL_W  = 24
-FIXED_W  = 4 + 1 + 17 + 1 + 1 + 10 + 1 + 10 + 1 + 10 + 2 + MODEL_W
-MIN_PROJ_W = 10
+MODEL_W      = 24
+CACHE_COLS_W = 10 + 1 + 10 + 1   # CacheW + CacheR columns width
+FIXED_W      = 4 + 1 + 17 + 1 + 1 + 10 + 1 + 10 + 1 + 10 + 2 + MODEL_W
+MIN_PROJ_W   = 10
 
 
 def sorted_sessions(sessions, sort_col, sort_asc):
@@ -268,8 +301,9 @@ def sorted_sessions(sessions, sort_col, sort_asc):
     )
 
 
-def proj_width(terminal_w):
-    return max(MIN_PROJ_W, terminal_w - FIXED_W)
+def proj_width(terminal_w, show_cache=False):
+    extra = CACHE_COLS_W if show_cache else 0
+    return max(MIN_PROJ_W, terminal_w - FIXED_W - extra)
 
 
 def addstr_clipped(win, row, col, text, attr, max_w):
@@ -280,13 +314,11 @@ def addstr_clipped(win, row, col, text, attr, max_w):
     win.addstr(row, col, text[:available], attr)
 
 
-def draw_header(stdscr, sort_col, sort_asc, pw, w):
+def draw_header(stdscr, sort_col, sort_asc, pw, w, show_cache=False):
     arrow = "▲" if sort_asc else "▼"
     cols = list(SORT_LABELS)
 
-    # Build column positions manually so we can color each segment
     col = 0
-    # "#   "
     addstr_clipped(stdscr, 1, col, f"{'#':<4} ", curses.color_pair(C_HEADER) | curses.A_BOLD, w)
     col += 5
 
@@ -307,25 +339,29 @@ def draw_header(stdscr, sort_col, sort_asc, pw, w):
         addstr_clipped(stdscr, 1, col, formatted + " ", attr, w)
         col += width + 1
 
-    # "Model"
+    if show_cache:
+        addstr_clipped(stdscr, 1, col, f"{'CacheW':>10} ", curses.color_pair(C_HEADER) | curses.A_BOLD, w)
+        col += 11
+        addstr_clipped(stdscr, 1, col, f"{'CacheR':>10} ", curses.color_pair(C_HEADER) | curses.A_BOLD, w)
+        col += 11
+
     addstr_clipped(stdscr, 1, col, " Model", curses.color_pair(C_HEADER) | curses.A_BOLD, w)
 
 
-def draw_table(stdscr, sessions, cursor, scroll, sort_col, sort_asc, filter_text="", esc_pending=False):
+def draw_table(stdscr, sessions, cursor, scroll, sort_col, sort_asc, filter_text="", esc_pending=False, show_cache=False, last_refresh=None):
     stdscr.erase()
     h, w = stdscr.getmaxyx()
 
-    # Title bar
     if filter_text is not None:
         active = f"{filter_text}█" if filter_text else "█"
         title = f" Filter: {active}  Esc clear  Enter confirm "
         stdscr.addstr(0, 0, title[:w].ljust(w - 1), curses.color_pair(C_BTN) | curses.A_BOLD)
     else:
-        title = " Claude Code Sessions — ↑↓ navigate  Enter detail  / filter  d delete  q quit "
+        title = " Claude Code Sessions — ↑↓ navigate  Enter detail  / filter  d delete  l/→ tokens  q quit "
         stdscr.addstr(0, 0, title[:w].ljust(w - 1), curses.color_pair(C_TITLE) | curses.A_BOLD)
 
-    pw = proj_width(w)
-    draw_header(stdscr, sort_col, sort_asc, pw, w)
+    pw = proj_width(w, show_cache)
+    draw_header(stdscr, sort_col, sort_asc, pw, w, show_cache)
 
     sep = "─" * (w - 1)
     addstr_clipped(stdscr, 2, 0, sep, curses.color_pair(C_SEP), w)
@@ -375,17 +411,178 @@ def draw_table(stdscr, sessions, cursor, scroll, sort_col, sort_asc, filter_text
         addstr_clipped(stdscr, row_y, col, f"{fmt_num(s['total_tokens']):>10}  ", cp_num, w)
         col += 12
 
+        if show_cache:
+            addstr_clipped(stdscr, row_y, col, f"{fmt_num(s['cache_creation_tokens']):>10} ", cp_num, w)
+            col += 11
+            addstr_clipped(stdscr, row_y, col, f"{fmt_num(s['cache_read_tokens']):>10} ", cp_num, w)
+            col += 11
+
         addstr_clipped(stdscr, row_y, col, s["model"][:MODEL_W], cp_model, w)
 
     sort_label = SORT_LABELS[sort_col]
     dir_label  = "asc" if sort_asc else "desc"
     filter_hint = f"  filter: \"{filter_text}\"" if filter_text is not None else ""
+    cache_hint  = "  c cache:on" if show_cache else "  c cache:off"
+    if last_refresh is not None:
+        age = int(time.monotonic() - last_refresh)
+        refresh_hint = f"  r refresh ({age}s ago)"
+    else:
+        refresh_hint = "  r refresh"
     if esc_pending:
         footer = " Press Esc again to quit "
         stdscr.addstr(h - 1, 0, footer[:w - 1].ljust(w - 1), curses.color_pair(C_DANGER) | curses.A_BOLD)
     else:
-        footer = f" {cursor+1}/{len(sessions)}  sorted by {sort_label} {dir_label}{COL_HINT}{filter_hint} "
+        footer = f" {cursor+1}/{len(sessions)}  sorted by {sort_label} {dir_label}{COL_HINT}{cache_hint}{refresh_hint}{filter_hint} "
         stdscr.addstr(h - 1, 0, footer[:w - 1].ljust(w - 1), curses.color_pair(C_FOOTER))
+    stdscr.refresh()
+
+
+def build_daily_stats(sessions):
+    """Aggregate token totals per calendar day, broken down by model.
+
+    Returns list of (date, stats) sorted newest-first where stats includes a
+    'models' dict: {model_name: {total, input, output, cache_creation, cache_read, count}}.
+    """
+    by_day = {}
+    for s in sessions:
+        ts = s["last_ts"]
+        if ts is None:
+            continue
+        day = ts.date()
+        if day not in by_day:
+            by_day[day] = {"total": 0, "input": 0, "output": 0,
+                           "cache_creation": 0, "cache_read": 0, "count": 0,
+                           "models": {}}
+        d = by_day[day]
+        d["total"]          += s["total_tokens"]
+        d["input"]          += s["input_tokens"]
+        d["output"]         += s["output_tokens"]
+        d["cache_creation"] += s["cache_creation_tokens"]
+        d["cache_read"]     += s["cache_read_tokens"]
+        d["count"]          += 1
+
+        model = s["model"] or "unknown"
+        if model not in d["models"]:
+            d["models"][model] = {"total": 0, "input": 0, "output": 0,
+                                  "cache_creation": 0, "cache_read": 0, "count": 0}
+        md = d["models"][model]
+        md["total"]          += s["total_tokens"]
+        md["input"]          += s["input_tokens"]
+        md["output"]         += s["output_tokens"]
+        md["cache_creation"] += s["cache_creation_tokens"]
+        md["cache_read"]     += s["cache_read_tokens"]
+        md["count"]          += 1
+
+    return sorted(by_day.items(), reverse=True)   # [(date, stats), ...]
+
+
+def build_tok_rows(daily):
+    """Flatten daily stats into a renderable row list.
+
+    Each element is either:
+      ("day",   day,   stats)          — day header row
+      ("model", model, model_stats, day_total)  — indented model sub-row
+    """
+    rows = []
+    for day, d in daily:
+        rows.append(("day", day, d))
+        for model, md in sorted(d["models"].items(), key=lambda x: -x[1]["total"]):
+            rows.append(("model", model, md, d["total"]))
+    return rows
+
+
+def draw_tokens_view(stdscr, sessions, tok_scroll, last_refresh=None):
+    stdscr.erase()
+    h, w = stdscr.getmaxyx()
+
+    title = " Claude Code Sessions — Consumo diario de tokens  h/← sessions  q quit "
+    stdscr.addstr(0, 0, title[:w].ljust(w - 1), curses.color_pair(C_TITLE) | curses.A_BOLD)
+
+    daily       = build_daily_stats(sessions)
+    rows        = build_tok_rows(daily)
+    grand_total = sum(d["total"] for _, d in daily)
+    max_day     = max((d["total"] for _, d in daily), default=1)
+
+    hdr = curses.color_pair(C_HEADER) | curses.A_BOLD
+    tok_w    = 13   # tokens column
+    pct_w    = 7    # % column  ("  13.0%")
+    cnt_w    = 5    # sessions count
+    sub_indent = 4  # leading spaces for model sub-rows (prefix "↳ " adds 2 more)
+    label_w  = 32   # wide enough for full model IDs (e.g. claude-haiku-4-5-20251001)
+    bar_w    = max(10, w - label_w - 1 - tok_w - 1 - pct_w - 1 - cnt_w - 2)
+
+    col = 0
+    addstr_clipped(stdscr, 1, col, f"{'Día / Modelo':<{label_w}} ", hdr, w); col += label_w + 1
+    addstr_clipped(stdscr, 1, col, f"{'Tokens':>{tok_w}} ", hdr, w);         col += tok_w + 1
+    addstr_clipped(stdscr, 1, col, f"{'% día':>{pct_w}} ", hdr, w);          col += pct_w + 1
+    addstr_clipped(stdscr, 1, col, f"{'Ses':>{cnt_w}}  ", hdr, w);           col += cnt_w + 2
+    addstr_clipped(stdscr, 1, col, "Uso relativo", hdr, w)
+
+    addstr_clipped(stdscr, 2, 0, "─" * (w - 1), curses.color_pair(C_SEP), w)
+
+    visible = h - 6
+    today   = datetime.now(tz=timezone.utc).date()
+
+    for i in range(visible):
+        idx = tok_scroll + i
+        if idx >= len(rows):
+            break
+        row   = rows[idx]
+        row_y = 3 + i
+
+        if row[0] == "day":
+            _, day, d = row
+            is_today      = (day == today)
+            pct_of_total  = d["total"] / grand_total * 100 if grand_total else 0.0
+            filled        = round(d["total"] / max_day * bar_w)
+            bar_str       = "█" * filled + "░" * (bar_w - filled)
+            cp_date = (curses.color_pair(C_DATE) | curses.A_BOLD) if is_today else curses.color_pair(C_DATE)
+            cp_num  = (curses.color_pair(C_NUM)  | curses.A_BOLD) if is_today else curses.color_pair(C_NUM)
+
+            col = 0
+            addstr_clipped(stdscr, row_y, col, f"{str(day):<{label_w}} ", cp_date, w); col += label_w + 1
+            addstr_clipped(stdscr, row_y, col, f"{fmt_num(d['total']):>{tok_w}} ", cp_num, w); col += tok_w + 1
+            addstr_clipped(stdscr, row_y, col, f"{pct_of_total:>{pct_w-1}.1f}%  ", cp_num, w); col += pct_w + 1
+            addstr_clipped(stdscr, row_y, col, f"{d['count']:>{cnt_w}}  ", cp_date, w);         col += cnt_w + 2
+            addstr_clipped(stdscr, row_y, col, bar_str, cp_num, w)
+
+        else:  # "model" sub-row
+            _, model, md, day_total = row
+            pct_of_day = md["total"] / day_total * 100 if day_total else 0.0
+            filled     = round(md["total"] / day_total * bar_w) if day_total else 0
+            cp_model   = curses.color_pair(C_MODEL)
+            cp_num     = curses.color_pair(C_NUM)
+
+            col = 0
+            label = " " * sub_indent + "↳ " + model
+            addstr_clipped(stdscr, row_y, col, f"{label:<{label_w}} ", cp_model, w); col += label_w + 1
+            addstr_clipped(stdscr, row_y, col, f"{fmt_num(md['total']):>{tok_w}} ", cp_num, w); col += tok_w + 1
+            addstr_clipped(stdscr, row_y, col, f"{pct_of_day:>{pct_w-1}.1f}%  ", cp_num, w);   col += pct_w + 1
+            addstr_clipped(stdscr, row_y, col, f"{md['count']:>{cnt_w}}  ", cp_model, w);       col += cnt_w + 2
+            bar_body = "█" * filled + "░" * (bar_w - filled)
+            addstr_clipped(stdscr, row_y, col, bar_body, cp_num, w)
+
+    # Summary line
+    summary_y = h - 2
+    addstr_clipped(stdscr, summary_y, 0, "─" * (w - 1), curses.color_pair(C_SEP), w)
+    n_sessions = sum(d["count"] for _, d in daily)
+    summary = (f"  Total {len(daily)} días · {n_sessions} sesiones · "
+               f"{fmt_num(grand_total)} tokens  "
+               f"(in {fmt_num(sum(d['input'] for _,d in daily))}  "
+               f"out {fmt_num(sum(d['output'] for _,d in daily))}  "
+               f"cache_r {fmt_num(sum(d['cache_read'] for _,d in daily))}  "
+               f"cache_w {fmt_num(sum(d['cache_creation'] for _,d in daily))})")
+    addstr_clipped(stdscr, summary_y, 0, summary, curses.color_pair(C_TOTAL) | curses.A_BOLD, w)
+
+    if last_refresh is not None:
+        age = int(time.monotonic() - last_refresh)
+        refresh_hint = f"  r refresh ({age}s ago)"
+    else:
+        refresh_hint = "  r refresh"
+    total_rows  = len(rows)
+    scroll_hint = f"  ↑↓/jk scroll ({tok_scroll+1}/{total_rows})" if total_rows > visible else ""
+    footer = f" h/← sessions{scroll_hint}{refresh_hint} "
+    stdscr.addstr(h - 1, 0, footer[:w - 1].ljust(w - 1), curses.color_pair(C_FOOTER))
     stdscr.refresh()
 
 
@@ -637,11 +834,20 @@ def apply_filter(sessions, text):
 def tui(stdscr, all_sessions):
     curses.curs_set(0)
     init_colors()
+    stdscr.timeout(1000)  # getch() returns -1 every 1s when idle
 
     sort_col    = 0
     sort_asc    = False
     filter_text = ""
     filtering   = False   # True while user is typing filter
+    show_cache  = False
+    last_refresh = time.monotonic()
+
+    def do_refresh():
+        nonlocal last_refresh
+        new_sessions = collect_sessions(limit=50)
+        all_sessions[:] = new_sessions
+        last_refresh = time.monotonic()
 
     def rebuild():
         base = sorted_sessions(all_sessions, sort_col, sort_asc)
@@ -650,14 +856,36 @@ def tui(stdscr, all_sessions):
     sessions = rebuild()
     cursor    = 0
     scroll    = 0
-    esc_pending = False
+    tok_scroll   = 0   # scroll position for the daily tokens view
+    esc_pending  = False
+    current_view = 0   # 0 = table, 1 = tokens
 
     while True:
+        # Auto-refresh when idle
+        if time.monotonic() - last_refresh >= REFRESH_INTERVAL:
+            current_id = sessions[cursor]["session_id"] if sessions else None
+            do_refresh()
+            sessions = rebuild()
+            # Restore cursor to same session if still present
+            if current_id:
+                for i, s in enumerate(sessions):
+                    if s["session_id"] == current_id:
+                        cursor = i
+                        break
+                else:
+                    cursor = min(cursor, max(0, len(sessions) - 1))
+
         h, _ = stdscr.getmaxyx()
         visible = h - 5
-        draw_table(stdscr, sessions, cursor, scroll, sort_col, sort_asc,
-                   filter_text if filtering else None, esc_pending)
+        if current_view == 0:
+            draw_table(stdscr, sessions, cursor, scroll, sort_col, sort_asc,
+                       filter_text if filtering else None, esc_pending, show_cache, last_refresh)
+        else:
+            draw_tokens_view(stdscr, sessions, tok_scroll, last_refresh)
         key = stdscr.getch()
+
+        if key == -1:  # timeout, loop to check auto-refresh
+            continue
 
         if filtering:
             if key == 27:                        # Esc — clear filter
@@ -690,30 +918,48 @@ def tui(stdscr, all_sessions):
             else:
                 esc_pending = True
                 continue
-        elif key == ord("/"):
+        elif key in (ord("h"), curses.KEY_LEFT):
+            current_view = 0
+        elif key in (ord("l"), curses.KEY_RIGHT):
+            current_view = 1
+        elif key == ord("/") and current_view == 0:
             filtering = True
         elif key in (curses.KEY_UP, ord("k"), ord("K")):
-            if cursor > 0:
+            if current_view == 1:
+                tok_scroll = max(0, tok_scroll - 1)
+            elif cursor > 0:
                 cursor -= 1
                 if cursor < scroll:
                     scroll = cursor
         elif key in (curses.KEY_DOWN, ord("j"), ord("J")):
-            if cursor < len(sessions) - 1:
+            if current_view == 1:
+                tok_scroll += 1   # clamped in draw_tokens_view naturally
+            elif cursor < len(sessions) - 1:
                 cursor += 1
                 if cursor >= scroll + visible:
                     scroll = cursor - visible + 1
         elif key == curses.KEY_PPAGE:
-            cursor = max(0, cursor - visible)
-            scroll = max(0, scroll - visible)
+            if current_view == 1:
+                tok_scroll = max(0, tok_scroll - visible)
+            else:
+                cursor = max(0, cursor - visible)
+                scroll = max(0, scroll - visible)
         elif key == curses.KEY_NPAGE:
-            cursor = min(len(sessions) - 1, cursor + visible)
-            scroll = min(max(0, len(sessions) - visible), scroll + visible)
+            if current_view == 1:
+                tok_scroll += visible
+            else:
+                cursor = min(len(sessions) - 1, cursor + visible)
+                scroll = min(max(0, len(sessions) - visible), scroll + visible)
         elif key == curses.KEY_HOME:
-            cursor = 0
-            scroll = 0
+            if current_view == 1:
+                tok_scroll = 0
+            else:
+                cursor = 0
+                scroll = 0
         elif key == curses.KEY_END:
-            cursor = len(sessions) - 1
-            scroll = max(0, cursor - visible + 1)
+            if current_view == 0:
+                cursor = len(sessions) - 1
+                scroll = max(0, cursor - visible + 1)
         elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
             if sessions:
                 open_session = draw_detail(stdscr, sessions[cursor])
@@ -724,7 +970,7 @@ def tui(stdscr, all_sessions):
                     if Path(cwd).exists():
                         os.chdir(cwd)
                     os.execvp("claude", ["claude", "--resume", s["session_id"]])
-        elif key in (ord("d"), ord("D")):
+        elif key in (ord("d"), ord("D")) and current_view == 0:
             if sessions:
                 h, w = stdscr.getmaxyx()
                 if confirm_delete(stdscr, sessions[cursor], w, h):
@@ -739,9 +985,22 @@ def tui(stdscr, all_sessions):
                         cursor = max(0, len(sessions) - 1)
                     if scroll > cursor:
                         scroll = cursor
+        elif key in (ord("r"), ord("R")):
+            current_id = sessions[cursor]["session_id"] if sessions else None
+            do_refresh()
+            sessions = rebuild()
+            if current_id:
+                for i, s in enumerate(sessions):
+                    if s["session_id"] == current_id:
+                        cursor = i
+                        break
+                else:
+                    cursor = min(cursor, max(0, len(sessions) - 1))
+        elif key in (ord("c"), ord("C")) and current_view == 0:
+            show_cache = not show_cache
         elif key == curses.KEY_RESIZE:
             pass
-        elif ord("1") <= key <= ord("5"):
+        elif ord("1") <= key <= ord("5") and current_view == 0:
             col = key - ord("1")
             if col == sort_col:
                 sort_asc = not sort_asc
